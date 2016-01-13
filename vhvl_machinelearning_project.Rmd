@@ -1,0 +1,111 @@
+---
+title: "Weight Lifting Exercises"
+author: "Vitor Lopes"
+date: "13th january, 2015"
+output: html_document
+---
+
+# Weight Lifting Exercises
+
+## Summary
+
+Project to build a machine learning algorithm to recognise different activity quality by using the measurements recorded by specific sensors.  
+Data set here:  
+*Training Data - https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+*Testing Data - https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+The data used came from: http://groupware.les.inf.puc-rio.br/har.  
+The Training Data was divided into two parts, one for training and the other for cross validation. 
+It was removed variables that weren´t measured and that consist mostly of NAs and blanks. Thus, 52 variables are used as predictors. The "classe" variable is the outcome variable. Both trees and random forests model are built. 
+The random forests model had a higher accuracy on the cross validation data set. 
+Finally, the random forests model was used to predict 20 different test cases in the testing set.
+
+```{r setoptions, echo=FALSE, message=FALSE}
+library(ggplot2)
+library(randomForest)
+library(knitr)
+library(caret)
+library(Hmisc)
+library(foreach)
+library(doParallel)
+options(warn=1)
+options(stringsAsFactors = FALSE)
+opts_chunk$set(cache=TRUE,eval=TRUE)
+```
+
+## Data Process and Results
+1.Read the original training data file, clean the data and split into a training set and a cross validation set.
+```{r}
+#read the orignal training data file
+data<-read.csv("pml-training.csv",na.strings=c("NA",""))
+
+# Cleaning data for invalid observations
+# Removing columns that consist mostly of NAs and blanks
+newdata<-data[,colSums(!is.na(data)) == nrow(data)]
+
+# Removing columns X,user_name,raw_timestamp_part_1,raw_timestamp_part_2,cvtd_timestamp,new_window,num_window, which are not sensor measurement 
+# Therefore leaves 53 columns (52 predictors and 1 outcome)
+newdata <- subset(newdata,select=-c(X,user_name,raw_timestamp_part_1,raw_timestamp_part_2,cvtd_timestamp,new_window,num_window) )
+
+# Data Partition
+#Split trainingset into trainingsample(70%) and testsample(30%)
+library(caret)
+inTrain <- createDataPartition(y=newdata$classe,p=0.7, list=FALSE)
+training <- newdata[inTrain,]   #13737 obs.
+validation <- newdata[-inTrain,]    #5885 obs.   
+
+
+# Converting features
+#Classification-feature (classe) to factor, all others as numeric
+training$classe <-as.factor(training$classe)
+training[, 1:6] <- sapply(training[, 1:6], as.numeric)
+validation$classe <-as.factor(validation$classe)
+validation[, 1:6] <- sapply(validation[, 1:6], as.numeric)
+
+```
+2.Build the model and use the validation data set to calculate the out of sample error.
+```{r}
+#predicting with trees
+Tree_Fit <- train(classe ~.,data = training,method="rpart")
+
+#calculate out of sample error
+confusionMatrix(validation$classe, predict(Tree_Fit, validation))
+```
+Trees model has 49.74% out of sample accuracy, or 50.26% out of sample error.
+
+```{r}
+#predicing with random forests
+#RF_Fit <- train(classe~.,data =training,method='rf')
+
+#faster with paralel processing
+registerDoParallel()
+RF_Fit <- foreach(ntree=rep(150, 6), .combine=randomForest::combine, .packages='randomForest') %dopar% {
+        randomForest(x=training[,1:52], y=training$classe, ntree=ntree)
+}
+
+#calculate out of sample error
+confusionMatrix(validation$classe, predict(RF_Fit, validation))
+```
+Random forests model has 99.39% out of sample accuracy, or 0.61% out of sample error.
+
+3.Random forests appear to have higher out of sample accuracy than trees. We apply random forest to the testing set.
+```{r }
+#read the testing set
+testing<-read.csv("pml-testing.csv",na.strings=c("NA",""))
+#preprocess the testing set
+testProc<-subset(testing,select=names(newdata[,-53]))
+#predict the class
+answers<-predict(RF_Fit, testProc)
+```
+4.Generate the submission file.
+```{r submit,eval=FALSE}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(answers)
+```
+
+
